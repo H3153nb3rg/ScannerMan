@@ -4,7 +4,6 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.scannerman.data.Avail
-import com.scannerman.data.DeviceGuesser
 import com.scannerman.data.DeviceType
 import com.scannerman.data.HistoryStore
 import com.scannerman.data.Host
@@ -67,11 +66,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         refreshNetwork(autoScan = settingsStore.value.autoScanOnStart)
     }
 
-    fun knownFor(h: Host): KnownDevice? = known.value.firstOrNull { it.matches(h) }
-
-    /** Effective type: manual override on the known device, else the auto-guess. */
-    fun typeOf(h: Host): DeviceType = knownFor(h)?.type ?: DeviceGuesser.guess(h).type
-
     /** Detects the current network and shows the stored result of the last run. */
     fun refreshNetwork(autoScan: Boolean = false) {
         if (_state.value.scanning) return
@@ -113,8 +107,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     },
                 )
                 val now = System.currentTimeMillis()
-                val merged = knownStore.combine(history.merge(previous, knownStore.combine(found), now))
-                withContext(Dispatchers.IO) { history.save(profile.id, now, merged) }
+                val merged = knownStore.combine(HistoryStore.merge(previous, knownStore.combine(found), now))
+                withContext(Dispatchers.IO) {
+                    history.save(profile.id, now, merged)
+                    knownStore.refresh(merged)
+                }
+                val moved = merged.count { h -> h.lastIpChange?.at == now }
                 val online = merged.count { it.isOnline }
                 _state.update {
                     it.copy(
@@ -122,7 +120,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         message = "$online online (v4 ${merged.count { h -> h.v4 == Avail.UP }}, " +
                             "v6 ${merged.count { h -> h.v6 == Avail.UP }}) · " +
                             "${merged.count { h -> h.status == HostStatus.NEW }} new · " +
-                            "${merged.count { h -> h.status == HostStatus.OFFLINE }} offline",
+                            "${merged.count { h -> h.status == HostStatus.OFFLINE }} offline" +
+                            (if (moved > 0) " · $moved changed IP" else ""),
                     )
                 }
             } catch (e: CancellationException) {

@@ -43,11 +43,15 @@ import com.scannerman.data.DeviceGuesser
 import com.scannerman.data.DeviceType
 import com.scannerman.data.HostStatus
 import com.scannerman.data.KnownDevice
+import com.scannerman.data.KnownDeviceStore
 
 @Composable
 fun KnownDevicesScreen(vm: MainViewModel, onBack: () -> Unit) {
     val known by vm.known.collectAsStateWithLifecycle()
     val s by vm.state.collectAsStateWithLifecycle()
+    val owners = remember(known, s.hosts) { KnownDeviceStore.assign(known, s.hosts) }
+    // Prefer the online record if a device has several.
+    val hostOf = { d: KnownDevice -> s.hosts.filter { owners[it.uid]?.id == d.id }.maxByOrNull { if (it.isOnline) 1 else 0 } }
     var editing by remember { mutableStateOf<KnownDevice?>(null) }
 
     Scaffold(
@@ -75,7 +79,7 @@ fun KnownDevicesScreen(vm: MainViewModel, onBack: () -> Unit) {
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             items(known, key = { it.id }) { d ->
-                val host = s.hosts.firstOrNull { d.matches(it) }
+                val host = hostOf(d)
                 val type = d.type ?: host?.let { DeviceGuesser.guess(it).type } ?: DeviceType.UNKNOWN
                 Card(Modifier.fillMaxWidth().clickable { editing = d }) {
                   Row(Modifier.padding(12.dp)) {
@@ -111,6 +115,13 @@ fun KnownDevicesScreen(vm: MainViewModel, onBack: () -> Unit) {
                             fontFamily = FontFamily.Monospace,
                             style = MaterialTheme.typography.bodySmall,
                         )
+                        host?.lastIpChange?.let { c ->
+                            Text(
+                                "IP changed " + DateUtils.getRelativeTimeSpanString(c.at) + " · was ${c.from}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.tertiary,
+                            )
+                        }
                         if (d.notes.isNotBlank()) Text(d.notes, style = MaterialTheme.typography.bodySmall)
                     }
                   }
@@ -122,7 +133,7 @@ fun KnownDevicesScreen(vm: MainViewModel, onBack: () -> Unit) {
     editing?.let { d ->
         KnownDeviceEditor(
             device = d,
-            autoType = s.hosts.firstOrNull { d.matches(it) }?.let { DeviceGuesser.guess(it).type },
+            autoType = hostOf(d)?.let { DeviceGuesser.guess(it).type },
             onDismiss = { editing = null },
             onSave = { vm.updateKnown(it); editing = null },
             onDelete = { vm.deleteKnown(d.id); editing = null },

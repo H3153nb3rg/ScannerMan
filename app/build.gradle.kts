@@ -52,4 +52,5 @@ dependencies {
     implementation("androidx.compose.material:material-icons-core")
     // Device-type icons (Router, Print, Tv, …). Unused icons are stripped by R8 in release.
     implementation("androidx.compose.material:material-icons-extended")
+    testImplementation("junit:junit:4.13.2")
 }

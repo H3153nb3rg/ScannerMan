@@ -3,6 +3,7 @@ package com.scannerman.net
 import android.content.Context
 import com.scannerman.data.Avail
 import com.scannerman.data.Host
+import com.scannerman.data.Identity
 import com.scannerman.data.Settings
 import com.scannerman.data.V6PortScan
 import kotlinx.coroutines.Dispatchers
@@ -49,6 +50,8 @@ class Scanner(private val settings: Settings, private val context: Context) {
         val ports4: MutableSet<Int> = ConcurrentHashMap.newKeySet()
         val ports6: MutableSet<Int> = ConcurrentHashMap.newKeySet()
         @Volatile var name: String? = null
+        /** Identity names from every source ("dns:…", "nb:…", "mdns:…", "fn:…"). */
+        @Volatile var names: List<String> = emptyList()
     }
 
     /**
@@ -119,14 +122,23 @@ class Scanner(private val settings: Settings, private val context: Context) {
 
         // ---- 3. Build device list, attach known IPv6 addresses ----------------------
         val usedPrev = HashSet<Host>()
-        fun prevFor(ip4: String?, mac: String?): Host? = previous.firstOrNull { p ->
-            !p.isSelf && p !in usedPrev &&
-                ((mac != null && p.mac == mac) || (ip4 != null && p.ip4 == ip4 && (p.mac == null || mac == null)))
-        }?.also { usedPrev += it }
+        // Which remembered device is this? Only used to re-probe its old IPv6 addresses;
+        // the full identity match happens in HistoryStore.merge().
+        val mdnsName = { md: Mdns.Device? -> Identity.nameId(Identity.MDNS, md?.hostname) }
+        fun prevFor(ip4: String?, mac: String?, md: Mdns.Device?): Host? {
+            val name = mdnsName(md)
+            val free = previous.filter { !it.isSelf && it !in usedPrev }
+            return (free.firstOrNull { p -> mac != null && p.mac.equals(mac, ignoreCase = true) }
+                ?: free.firstOrNull { p -> name != null && name in p.names }
+                ?: free.firstOrNull { p ->
+                    ip4 != null && p.ip4 == ip4 && (p.mac == null || mac == null) &&
+                        (name == null || p.names.none { Identity.source(it) == Identity.MDNS })
+                })?.also { usedPrev += it }
+        }
 
         val works = alive4.map { ip ->
             val md = mdnsByIp4[ip]
-            val prev = prevFor(ip, macByIp4[ip] ?: md?.mac)
+            val prev = prevFor(ip, macByIp4[ip] ?: md?.mac, md)
             val mac = macByIp4[ip] ?: md?.mac ?: prev?.mac
             val v6 = linkedSetOf<String>()
             if (settings.ipv6Enabled) {
@@ -244,6 +256,12 @@ class Scanner(private val settings: Settings, private val context: Context) {
                 val addr = w.ip4 ?: w.ip6.firstOrNull { !it.startsWith("fe80") } ?: w.ip6.firstOrNull()?.let(net::scoped)
                 val rdns = if (settings.resolveNames && addr != null) withTimeoutOrNull(2500) { reverseLookup(addr) } else null
                 w.name = rdns ?: nb?.name ?: w.mdns?.friendlyName ?: w.mdns?.hostname
+                w.names = listOfNotNull(
+                    Identity.nameId(Identity.DNS, rdns),
+                    Identity.nameId(Identity.NETBIOS, nb?.name),
+                    Identity.nameId(Identity.MDNS, w.mdns?.hostname),
+                    Identity.nameId(Identity.FRIENDLY, w.mdns?.friendlyName),
+                ).distinct()
                 onProgress(Phase.NAMES, done.incrementAndGet(), works.size)
             }
         }.awaitAll()
@@ -270,6 +288,7 @@ class Scanner(private val settings: Settings, private val context: Context) {
             else -> Avail.UNKNOWN
         },
         isGateway = ip4 != null && ip4 == net.gateway,
+        names = names,
     )
 
     private fun selfHost(net: LocalNetwork) = Host(

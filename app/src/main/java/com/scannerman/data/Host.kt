@@ -1,5 +1,7 @@
 package com.scannerman.data
 
+import java.util.UUID
+
 /** Status of a host relative to the previous scan of the same network. */
 enum class HostStatus {
     /** Seen in this scan and in the previous one. */
@@ -12,6 +14,9 @@ enum class HostStatus {
 
 /** Per-protocol reachability in the latest scan. */
 enum class Avail { UP, DOWN, UNKNOWN }
+
+/** The device moved from [from] to [to] (detected at [at]); [via] says how it was recognised. */
+data class IpChange(val from: String, val to: String, val at: Long, val via: String)
 
 data class Host(
     /** Null for hosts only seen over IPv6. */
@@ -36,20 +41,22 @@ data class Host(
     val status: HostStatus = HostStatus.ONLINE,
     val isSelf: Boolean = false,
     val isGateway: Boolean = false,
+    /** Identity names as "<source>:<name>" (see [Identity]); survive IP changes. */
+    val names: List<String> = emptyList(),
+    /** Stable id of this device in the history; kept as long as the device is recognised. */
+    val uid: String = UUID.randomUUID().toString(),
+    /** IPv4 changes, newest first. */
+    val ipChanges: List<IpChange> = emptyList(),
 ) {
-    /** Stable identity across scans: MAC if known (survives DHCP changes), else an address. */
-    val key: String get() = mac ?: ip4 ?: ip6.firstOrNull() ?: "?"
+    /** Stable identity across scans. */
+    val key: String get() = uid
+
+    val lastIpChange: IpChange? get() = ipChanges.firstOrNull()
 
     /** Address used for display and "open with". */
     val address: String get() = ip4 ?: ip6.firstOrNull() ?: "?"
 
     val isOnline: Boolean get() = v4 == Avail.UP || v6 == Avail.UP
-
-    /** True when this record and [other] describe the same physical device. */
-    fun sameDeviceAs(other: Host): Boolean =
-        (mac != null && mac == other.mac) ||
-            (ip4 != null && ip4 == other.ip4 && (mac == null || other.mac == null)) ||
-            ip6.any { it in other.ip6 }
 
     /** Combine two records of the same device, preferring this one. */
     fun absorb(o: Host): Host = copy(
@@ -75,12 +82,18 @@ data class Host(
         },
         isSelf = isSelf || o.isSelf,
         isGateway = isGateway || o.isGateway,
+        names = Identity.mergeNames(names, o.names),
+        ipChanges = (ipChanges + o.ipChanges).distinct().sortedByDescending { it.at }.take(MAX_IP_CHANGES),
     )
 
     private fun best(a: Avail, b: Avail) = when {
         a == Avail.UP || b == Avail.UP -> Avail.UP
         a == Avail.DOWN || b == Avail.DOWN -> Avail.DOWN
         else -> Avail.UNKNOWN
+    }
+
+    companion object {
+        const val MAX_IP_CHANGES = 10
     }
 
     private fun maxOfNullable(a: Long?, b: Long?) = if (a == null) b else if (b == null) a else maxOf(a, b)

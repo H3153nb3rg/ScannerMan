@@ -30,6 +30,7 @@ object Export {
         appendLine("  IPv4: ${h.ip4 ?: "—"}  [${avail(h.v4, h.lastSeen4)}]")
         appendLine("  IPv6: ${h.ip6.joinToString(", ").ifEmpty { "—" }}  [${avail(h.v6, h.lastSeen6)}]")
         appendLine("  MAC:  ${h.mac ?: "unknown"}")
+        h.ipChanges.forEach { appendLine("  IP change: ${it.from} → ${it.to} (${fmt(it.at)}, by ${it.via.ifEmpty { "address" }})") }
         if (h.openPorts.isNotEmpty()) appendLine("  Open v4: " + h.openPorts.joinToString(", ") { Ports.label(it) })
         if (h.openPorts6.isNotEmpty()) appendLine("  Open v6: " + h.openPorts6.joinToString(", ") { Ports.label(it) })
         known?.notes?.takeIf { it.isNotBlank() }?.let { appendLine("  Notes: $it") }

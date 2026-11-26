@@ -80,6 +80,7 @@ import com.scannerman.data.Export
 import com.scannerman.data.Host
 import com.scannerman.data.HostStatus
 import com.scannerman.data.KnownDevice
+import com.scannerman.data.KnownDeviceStore
 import com.scannerman.net.Ports
 
 private enum class Filter(val label: String) {
@@ -91,7 +92,8 @@ fun MainScreen(vm: MainViewModel, navigate: (Screen) -> Unit) {
     val s by vm.state.collectAsStateWithLifecycle()
     val settings by vm.settings.collectAsStateWithLifecycle()
     val known by vm.known.collectAsStateWithLifecycle()
-    val knownFor: (Host) -> KnownDevice? = { h -> known.firstOrNull { it.matches(h) } }
+    val owners = remember(known, s.hosts) { KnownDeviceStore.assign(known, s.hosts) }
+    val knownFor: (Host) -> KnownDevice? = { h -> owners[h.uid] }
     val ctx = LocalContext.current
     val snackbar = remember { SnackbarHostState() }
     var filter by rememberSaveable { mutableStateOf(Filter.ALL) }
@@ -243,11 +245,11 @@ fun MainScreen(vm: MainViewModel, navigate: (Screen) -> Unit) {
                     contentPadding = PaddingValues(12.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    items(shown, key = { it.address + "|" + it.key }) { h ->
+                    items(shown, key = { it.key }) { h ->
                         val k = knownFor(h)
                         val type = k?.type ?: remember(h) { DeviceGuesser.guess(h).type }
                         HostCard(h, k, type, showUnknownTag = known.isNotEmpty(), finalStatus = !s.scanning) {
-                            selectedKey = h.address + "|" + h.key
+                            selectedKey = h.key
                         }
                     }
                 }
@@ -269,7 +271,7 @@ fun MainScreen(vm: MainViewModel, navigate: (Screen) -> Unit) {
         }
     }
 
-    val selected = s.hosts.firstOrNull { it.address + "|" + it.key == selectedKey }
+    val selected = s.hosts.firstOrNull { it.key == selectedKey }
     if (selected != null) {
         ModalBottomSheet(onDismissRequest = { selectedKey = null }) {
             HostDetail(selected, knownFor(selected), known, vm, editable = !s.scanning)
@@ -389,6 +391,15 @@ private fun HostCard(
             if (offline) {
                 Text("Last seen " + DateUtils.getRelativeTimeSpanString(h.lastSeen), style = MaterialTheme.typography.bodySmall)
             }
+            h.lastIpChange?.let { c ->
+                Text(
+                    "IP changed " + DateUtils.getRelativeTimeSpanString(c.at) + " · was ${c.from}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.tertiary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
             val ports = (h.openPorts + h.openPorts6).distinct().sorted()
             if (ports.isNotEmpty()) {
                 Text(
@@ -465,6 +476,20 @@ private fun HostDetail(h: Host, known: KnownDevice?, allKnown: List<KnownDevice>
         h.ip4?.let { ip -> InfoRow("Address", ip) { Actions.copy(ctx, "IPv4", ip) } }
         InfoRow("MAC", h.mac ?: "unavailable") { h.mac?.let { Actions.copy(ctx, "MAC", it) } }
         PortChips(h.ip4, h.openPorts, emptyText = if (h.v4 == Avail.UP) "No scanned ports open" else null)
+        if (h.ipChanges.isNotEmpty()) {
+            Text("Address changes", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(top = 8.dp))
+            h.ipChanges.forEach { c ->
+                Column(Modifier.padding(vertical = 3.dp)) {
+                    Text("${c.from} → ${c.to}", fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        DateUtils.formatDateTime(ctx, c.at, DateUtils.FORMAT_SHOW_DATE or DateUtils.FORMAT_SHOW_TIME) +
+                            " · recognised by " + c.via.ifEmpty { "address" },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.outline,
+                    )
+                }
+            }
+        }
 
         HorizontalDivider(Modifier.padding(vertical = 8.dp))
         Text("IPv6", style = MaterialTheme.typography.titleSmall)
